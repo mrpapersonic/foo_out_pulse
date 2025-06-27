@@ -1,0 +1,38 @@
+---
+BasedOnStyle: LLVM
+UseTab: ForIndentation
+PointerAlignment: Right
+ColumnLimit: 120
+IndentWidth: 4
+TabWidth: 4
+
+# hack!!!
+AccessModifierOffset: -4
+
+IndentCaseLabels: true
+IndentAccessModifiers: false
+IndentPPDirectives: AfterHash
+
+BreakBeforeBraces: WebKit
+BreakStringLiterals: true
+
+AlwaysBreakTemplateDeclarations: true
+
+SpaceAfterTemplateKeyword: false
+
+AlignAfterOpenBracket: Align
+AlignArrayOfStructures: Left
+AlignEscapedNewlines: DontAlign
+AlignConsecutiveMacros: true
+
+AllowShortIfStatementsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Empty
+AllowShortEnumsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: InlineOnly
+AllowShortCaseLabelsOnASingleLine: true
+
+Cpp11BracedListStyle: true
+
+---
+Language: Cpp
+Standard: c++17
