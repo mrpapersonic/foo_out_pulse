@@ -311,7 +311,7 @@ typedef enum pa_seek_mode {
 	PA_SEEK_RELATIVE_ON_READ = 2,
 	PA_SEEK_RELATIVE_END = 3
 } pa_seek_mode_t;
-typedef void (*pa_free_cb_t)(void *p);
+typedef void (__stdcall *pa_free_cb_t)(void *p);
 typedef pa_threaded_mainloop *(__stdcall *pa_threaded_mainloop_new)(void);
 typedef void(__stdcall *pa_threaded_mainloop_free)(pa_threaded_mainloop *m);
 typedef int(__stdcall *pa_threaded_mainloop_start)(pa_threaded_mainloop *m);
@@ -325,17 +325,17 @@ typedef void(__stdcall *pa_threaded_mainloop_accept)(pa_threaded_mainloop *m);
 typedef int(__stdcall *pa_threaded_mainloop_get_retval)(pa_threaded_mainloop *m);
 typedef pa_mainloop_api *(__stdcall *pa_threaded_mainloop_get_api)(
 		pa_threaded_mainloop *m);
-typedef void (*pa_io_event_cb_t)(pa_mainloop_api *ea, pa_io_event *e, int fd,
+typedef void (__stdcall *pa_io_event_cb_t)(pa_mainloop_api *ea, pa_io_event *e, int fd,
 																 pa_io_event_flags_t events, void *userdata);
-typedef void (*pa_io_event_destroy_cb_t)(pa_mainloop_api *a, pa_io_event *e,
+typedef void (__stdcall *pa_io_event_destroy_cb_t)(pa_mainloop_api *a, pa_io_event *e,
 																				 void *userdata);
-typedef void (*pa_time_event_cb_t)(pa_mainloop_api *a, pa_time_event *e,
+typedef void (__stdcall *pa_time_event_cb_t)(pa_mainloop_api *a, pa_time_event *e,
 																	 const struct timeval *tv, void *userdata);
-typedef void (*pa_time_event_destroy_cb_t)(pa_mainloop_api *a, pa_time_event *e,
+typedef void (__stdcall *pa_time_event_destroy_cb_t)(pa_mainloop_api *a, pa_time_event *e,
 																					 void *userdata);
-typedef void (*pa_defer_event_cb_t)(pa_mainloop_api *a, pa_defer_event *e,
+typedef void (__stdcall *pa_defer_event_cb_t)(pa_mainloop_api *a, pa_defer_event *e,
 																		void *userdata);
-typedef void (*pa_defer_event_destroy_cb_t)(pa_mainloop_api *a,
+typedef void (__stdcall *pa_defer_event_destroy_cb_t)(pa_mainloop_api *a,
 																						pa_defer_event *e, void *userdata);
 struct pa_io_event {
 	pa_mainloop *mainloop;
@@ -421,7 +421,7 @@ struct pa_mainloop {
 typedef void(__stdcall *pa_context_notify_cb_t)(pa_context *c, void *userdata);
 typedef void(__stdcall *pa_context_success_cb_t)(pa_context *c, int success, void *userdata);
 typedef void(__stdcall *pa_context_event_cb_t)(pa_context *c, const char *name, pa_proplist *p, void *userdata);
-typedef pa_context *(__stdcall *pa_context_new_with_proplist)(
+typedef pa_context *(__cdecl *pa_context_new_with_proplist)(
 		pa_mainloop_api *mainloop, const char *name, pa_proplist *proplist);
 typedef void(__stdcall *pa_context_unref)(pa_context *c);
 typedef pa_context *(__stdcall *pa_context_ref)(pa_context *c);
@@ -433,9 +433,9 @@ typedef pa_context_state_t(__stdcall *pa_context_get_state)(pa_context *c);
 typedef int(__stdcall *pa_context_connect)(pa_context *c, const char *server, pa_context_flags_t flags, const pa_spawn_api *api);
 typedef void(__stdcall *pa_context_disconnect)(pa_context *c);
 typedef pa_operation *(__stdcall *pa_context_drain)(pa_context *c, pa_context_notify_cb_t cb, void *userdata);
-typedef void (*pa_stream_success_cb_t)(pa_stream *s, int success, void *userdata);
-typedef void (*pa_stream_request_cb_t)(pa_stream *p, size_t nbytes, void *userdata);
-typedef void (*pa_stream_notify_cb_t)(pa_stream *p, void *userdata);
+typedef void (__stdcall *pa_stream_success_cb_t)(pa_stream *s, int success, void *userdata);
+typedef void (__stdcall *pa_stream_request_cb_t)(pa_stream *p, size_t nbytes, void *userdata);
+typedef void (__stdcall *pa_stream_notify_cb_t)(pa_stream *p, void *userdata);
 typedef pa_stream *(__stdcall *pa_stream_new)(pa_context *c, const char *name, const pa_sample_spec *ss, const pa_channel_map *map);
 typedef void(__stdcall *pa_stream_unref)(pa_stream *s);
 typedef pa_stream_state_t(__stdcall *pa_stream_get_state)(pa_stream *p);
@@ -632,7 +632,7 @@ typedef struct pa_sink_input_info {
 	pa_format_info *format;
 } pa_sink_input_info;
 
-typedef void (*pa_sink_input_info_cb_t)(pa_context *c,
+typedef void (__stdcall *pa_sink_input_info_cb_t)(pa_context *c,
 																				const pa_sink_input_info *i, int eol,
 																				void *userdata);
 typedef pa_operation *(__stdcall *pa_context_get_sink_input_info)(
@@ -702,7 +702,7 @@ typedef enum pa_subscription_event_type {
 #define PA_SUBSCRIPTION_EVENT_REMOVE PA_SUBSCRIPTION_EVENT_REMOVE
 #define PA_SUBSCRIPTION_EVENT_TYPE_MASK PA_SUBSCRIPTION_EVENT_TYPE_MASK
 
-typedef void (*pa_context_subscribe_cb_t)(pa_context *c,
+typedef void (__stdcall  *pa_context_subscribe_cb_t)(pa_context* c,
 																					pa_subscription_event_type_t t,
 																					uint32_t idx, void *userdata);
 typedef pa_operation *(__stdcall *pa_context_subscribe)(

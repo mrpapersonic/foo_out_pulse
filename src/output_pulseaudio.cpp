@@ -11,8 +11,44 @@
 #include "foobar2000-sdk/foobar2000/SDK/output.h"
 #include "pulse.h"
 
+/* cargopasta'd from foobar2000 SDK, was removed after 2.0  --paper */
+struct t_samplespec {
+    t_uint32 m_sample_rate;
+    t_uint32 m_channels, m_channel_config;
+
+    t_size time_to_samples(double p_time) const { PFC_ASSERT(is_valid()); return (t_size)audio_math::time_to_samples(p_time, m_sample_rate); }
+    double samples_to_time(t_size p_samples) const { PFC_ASSERT(is_valid()); return audio_math::samples_to_time(p_samples, m_sample_rate); }
+
+    inline t_samplespec() { reset(); }
+    inline t_samplespec(audio_chunk const& in) { fromchunk(in); }
+
+    inline void reset() { m_sample_rate = 0; m_channels = 0; m_channel_config = 0; }
+
+    inline bool operator==(const t_samplespec& p_spec2) const {
+        return m_sample_rate == p_spec2.m_sample_rate && m_channels == p_spec2.m_channels && m_channel_config == p_spec2.m_channel_config;
+    }
+
+    inline bool operator!=(const t_samplespec& p_spec2) const {
+        return !(*this == p_spec2);
+    }
+
+    inline bool is_valid() const {
+        return m_sample_rate > 0 && m_channels > 0 && audio_chunk::g_count_channels(m_channel_config) == m_channels;
+    }
+
+    static t_samplespec g_fromchunk(const audio_chunk& p_chunk) {
+        t_samplespec temp; temp.fromchunk(p_chunk); return temp;
+    }
+
+    void fromchunk(const audio_chunk& p_chunk) {
+        m_sample_rate = p_chunk.get_sample_rate();
+        m_channels = p_chunk.get_channels();
+        m_channel_config = p_chunk.get_channel_config();
+    }
+};
+
 namespace {
-typedef HRESULT(CALLBACK* LPFNDLLFUNC1)(DWORD, UINT*);
+
 static pa_strerror g_pa_strerror;
 static pa_threaded_mainloop_new g_pa_threaded_mainloop_new;
 static pa_threaded_mainloop_free g_pa_threaded_mainloop_free;
@@ -117,7 +153,7 @@ static const GUID guid_cfg_pulseaudio_prebuffer = {
     {0xaf, 0x3d, 0xc6, 0xcd, 0x2f, 0x52, 0xac, 0xee}};
 
 static advconfig_branch_factory g_pulseaudio_output_branch(
-    "Pulseaudio output", guid_cfg_pulseaudio_branch,
+    "PulseAudio output", guid_cfg_pulseaudio_branch,
     advconfig_branch::guid_branch_playback, 0);
 static advconfig_integer_factory cfg_pulseaudio_seek_fade_out(
     "Fade out on seek (milliseconds)", guid_cfg_pulseaudio_fade_out_seek,
@@ -140,6 +176,7 @@ static advconfig_integer_factory cfg_pulseaudio_prebuf(
     "Request prebuffer (milliseconds)", guid_cfg_pulseaudio_prebuffer,
     guid_cfg_pulseaudio_branch, 0, 200, 0, 100000, 0);
 
+/* LOL WOW C++ IS UGLY */
 class lookback_buffer {
  public:
   lookback_buffer() : max_size_(0), buf_(), out_buf_(), lookback_(0){};
@@ -201,8 +238,8 @@ class output_pulse : public output_v4 {
  public:
   typedef struct fade_in {
     bool active = false;
-    size_t total_samples;
-    size_t progress;
+    size_t total_samples = 0;
+    size_t progress = 0;
   } fade;
 
   output_pulse(const GUID& p_device, double p_buffer_length, bool p_dither,
@@ -238,22 +275,24 @@ class output_pulse : public output_v4 {
       stop();
       return;
     }
-    pa_proplist* proplist = g_pa_proplist_new();
-    g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_NAME, "foobar2000");
-    g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_ID, "foobar2000");
-    g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_ICON_NAME, "foobar2000");
 
-    pa_mainloop_api* api;
+
     g_pa_threaded_mainloop_lock(mainloop);
-    api = g_pa_threaded_mainloop_get_api(mainloop);
-    context = g_pa_context_new_with_proplist(api, "foobar2000", proplist);
-    if (proplist != NULL) g_pa_proplist_free(proplist);
+    pa_mainloop_api *api = g_pa_threaded_mainloop_get_api(mainloop);
+    {
+        pa_proplist* proplist = g_pa_proplist_new();
+        g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_NAME, "foobar2000");
+        g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_ID, "foobar2000");
+        g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_ICON_NAME, "foobar2000");
+        // FIXME how do we do this
+        // g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_VERSION, "");
+        context = g_pa_context_new_with_proplist(api, "foobar2000", proplist);
+        //if (proplist != NULL) g_pa_proplist_free(proplist);
+    }
 
     g_pa_context_set_state_callback(context, context_state_cb, this);
-    const char* server = is_using_winelib ? NULL : "127.0.0.1";
-    if (g_pa_context_connect(context, server, (pa_context_flags_t)0, NULL) <
-            0 ||
-        context_wait(context, mainloop)) {
+    const char* server = /*is_using_winelib ? NULL : */"127.0.0.1";
+    if (g_pa_context_connect(context, server, (pa_context_flags_t)0, NULL) < 0 || context_wait(context, mainloop)) {
       g_pa_context_unref(context);
       context = NULL;
       g_pa_threaded_mainloop_unlock(mainloop);
@@ -439,8 +478,7 @@ class output_pulse : public output_v4 {
     if (fade_in_next_ms > 0) {
       active_fade_in = fade();
       active_fade_in.active = true;
-      active_fade_in.total_samples =
-          m_incoming_spec.time_to_samples(0.001 * fade_in_next_ms);
+      active_fade_in.total_samples = m_incoming_spec.time_to_samples(0.001 * fade_in_next_ms);
       active_fade_in.progress = 0;
       fade_in_next_ms = 0;
     }
@@ -490,7 +528,7 @@ class output_pulse : public output_v4 {
   static bool g_is_high_latency() { return true; }
   static uint32_t g_extra_flags() { return 0; }
   static void g_advanced_settings_popup(HWND p_parent, POINT p_menupoint) {}
-  static const char* g_get_name() { return "Pulseaudio"; }
+  static const char* g_get_name() { return "PulseAudio"; }
 
  private:
   const double offset = 0.05;
@@ -535,7 +573,7 @@ class output_pulse : public output_v4 {
     return 0;
   }
 
-  static void context_subscribe_cb(pa_context* c,
+  static void __stdcall context_subscribe_cb(pa_context* c,
                                    pa_subscription_event_type_t t, uint32_t idx,
                                    void* userdata) {
     if ((pa_subscription_event_type)(t & PA_SUBSCRIPTION_EVENT_SINK_INPUT) ==
@@ -550,7 +588,7 @@ class output_pulse : public output_v4 {
     }
   }
 
-  static void sink_input_info_cb(pa_context* c, const pa_sink_input_info* i,
+  static void __stdcall sink_input_info_cb(pa_context* c, const pa_sink_input_info* i,
                                  int eol, void* userdata) {
     output_pulse* output = (output_pulse*)userdata;
     if (i == NULL || output == NULL) return;
@@ -567,7 +605,7 @@ class output_pulse : public output_v4 {
     fb2k::inMainThread([]() { playback_control::get()->stop(); });
   }
 
-  static void context_state_cb(pa_context* ctx, void* userdata) {
+  static void __stdcall context_state_cb(pa_context* ctx, void* userdata) {
     output_pulse* output = (output_pulse*)userdata;
     std::stringstream s;
     switch (g_pa_context_get_state(ctx)) {
@@ -592,7 +630,7 @@ class output_pulse : public output_v4 {
     return 0;
   }
 
-  static void stream_state_cb(pa_stream* s, void* userdata) {
+  static void __stdcall stream_state_cb(pa_stream* s, void* userdata) {
     pa_threaded_mainloop* ml = (pa_threaded_mainloop*)userdata;
 
     switch (g_pa_stream_get_state(s)) {
@@ -605,18 +643,18 @@ class output_pulse : public output_v4 {
     }
   }
 
-  static void stream_started_cb(pa_stream* s, void* userdata) {
+  static void __stdcall stream_started_cb(pa_stream* s, void* userdata) {
     output_pulse* output = (output_pulse*)userdata;
     output->progressing = true;
   }
 
-  static void stream_underflow_cb(pa_stream* s, void* userdata) {
+  static void __stdcall stream_underflow_cb(pa_stream* s, void* userdata) {
     output_pulse* output = (output_pulse*)userdata;
     output->progressing = false;
     output->trigger_update.set_state(true);
   }
 
-  static void stream_write_cb(pa_stream* s, size_t nbytes, void* userdata) {
+  static void __stdcall stream_write_cb(pa_stream* s, size_t nbytes, void* userdata) {
     output_pulse* output = (output_pulse*)userdata;
     output->trigger_update.set_state(true);
   }
@@ -803,7 +841,7 @@ class output_pulse : public output_v4 {
     g_pa_threaded_mainloop_unlock(mainloop);
   }
 
-  static void stream_success_cb(pa_stream* s, int success, void* userdata) {
+  static void __stdcall stream_success_cb(pa_stream* s, int success, void* userdata) {
     g_pa_threaded_mainloop_signal((pa_threaded_mainloop*)userdata, 0);
   }
 
@@ -856,7 +894,7 @@ class output_pulse : public output_v4 {
         m_incoming_spec.m_channels * 4);
 
     std::stringstream s;
-    s << "Pulseaudio: requesting buffer attributes: maxlength "
+    s << "PulseAudio: requesting buffer attributes: maxlength "
       << attr.maxlength << ", minreq " << attr.minreq << ", tlength "
       << attr.tlength << ", prebuf " << attr.prebuf;
     console::info(s.str().c_str());
@@ -897,7 +935,7 @@ class output_pulse : public output_v4 {
         rewind_buffer.reset(attr.maxlength);
       } else {
         std::stringstream s;
-        s << "Pulseaudio: got buffer attributes: maxlength "
+        s << "PulseAudio: got buffer attributes: maxlength "
           << received_attr->maxlength << ", minreq " << received_attr->minreq
           << ", tlength " << received_attr->tlength << ", prebuf "
           << received_attr->prebuf;
@@ -913,7 +951,7 @@ class output_pulse : public output_v4 {
 
   static void console_error(const char* prefix, int error_code) {
     std::stringstream s;
-    s << "Pulseaudio: ";
+    s << "PulseAudio: ";
     s << prefix;
 
     if (error_code != 0) {
@@ -926,7 +964,7 @@ class output_pulse : public output_v4 {
     console::error(s.str().c_str());
   }
 
-  static void stream_drained_cb(pa_stream* s, int success, void* userdata) {
+  static void __stdcall stream_drained_cb(pa_stream* s, int success, void* userdata) {
     output_pulse* output = (output_pulse*)userdata;
     output->draining = false;
     output->drained = true;
@@ -952,209 +990,88 @@ class output_pulse : public output_v4 {
       return false;
     }
 
-    g_pa_strerror = (pa_strerror)GetProcAddress(libpulse, "WIN_pa_strerror");
-    g_pa_threaded_mainloop_new = (pa_threaded_mainloop_new)GetProcAddress(
-        libpulse, "WIN_pa_threaded_mainloop_new");
-    g_pa_threaded_mainloop_free = (pa_threaded_mainloop_free)GetProcAddress(
-        libpulse, "WIN_pa_threaded_mainloop_free");
-    g_pa_threaded_mainloop_start = (pa_threaded_mainloop_start)GetProcAddress(
-        libpulse, "WIN_pa_threaded_mainloop_start");
-    g_pa_threaded_mainloop_stop = (pa_threaded_mainloop_stop)GetProcAddress(
-        libpulse, "WIN_pa_threaded_mainloop_stop");
-    g_pa_threaded_mainloop_lock = (pa_threaded_mainloop_lock)GetProcAddress(
-        libpulse, "WIN_pa_threaded_mainloop_lock");
-    g_pa_threaded_mainloop_unlock = (pa_threaded_mainloop_unlock)GetProcAddress(
-        libpulse, "WIN_pa_threaded_mainloop_unlock");
-    g_pa_threaded_mainloop_wait = (pa_threaded_mainloop_wait)GetProcAddress(
-        libpulse, "WIN_pa_threaded_mainloop_wait");
-    g_pa_threaded_mainloop_signal = (pa_threaded_mainloop_signal)GetProcAddress(
-        libpulse, "WIN_pa_threaded_mainloop_signal");
-    g_pa_threaded_mainloop_accept = (pa_threaded_mainloop_accept)GetProcAddress(
-        libpulse, "WIN_pa_threaded_mainloop_accept");
-    g_pa_threaded_mainloop_get_retval =
-        (pa_threaded_mainloop_get_retval)GetProcAddress(
-            libpulse, "WIN_pa_threaded_mainloop_get_retval");
-    g_pa_threaded_mainloop_get_api =
-        (pa_threaded_mainloop_get_api)GetProcAddress(
-            libpulse, "WIN_pa_threaded_mainloop_get_api");
+#define LOAD_PULSE_FUNC(x) \
+do { \
+    g_##x = (x)GetProcAddress(libpulse, "WIN_" #x); \
+    if (!g_##x) { \
+        console::error("Failed to load function " #x " from libpulse DLL!"); \
+        return false; \
+    } \
+} while (0)
 
-    g_pa_stream_new = (pa_stream_new)GetProcAddress(libpulse, "WIN_pa_stream_new");
-    g_pa_stream_connect_playback = (pa_stream_connect_playback)GetProcAddress(
-        libpulse, "WIN_pa_stream_connect_playback");
-    g_pa_stream_disconnect =
-        (pa_stream_disconnect)GetProcAddress(libpulse, "WIN_pa_stream_disconnect");
-    g_pa_stream_unref =
-        (pa_stream_unref)GetProcAddress(libpulse, "WIN_pa_stream_unref");
-    g_pa_stream_write =
-        (pa_stream_write)GetProcAddress(libpulse, "WIN_pa_stream_write");
-    g_pa_stream_cancel_write = (pa_stream_cancel_write)GetProcAddress(
-        libpulse, "WIN_pa_stream_cancel_write");
-    g_pa_stream_drop =
-        (pa_stream_drop)GetProcAddress(libpulse, "WIN_pa_stream_drop");
-    g_pa_stream_writable_size = (pa_stream_writable_size)GetProcAddress(
-        libpulse, "WIN_pa_stream_writable_size");
-    g_pa_stream_drain =
-        (pa_stream_drain)GetProcAddress(libpulse, "WIN_pa_stream_drain");
-    g_pa_stream_set_write_callback =
-        (pa_stream_set_write_callback)GetProcAddress(
-            libpulse, "WIN_pa_stream_set_write_callback");
-    g_pa_stream_set_state_callback =
-        (pa_stream_set_state_callback)GetProcAddress(
-            libpulse, "WIN_pa_stream_set_state_callback");
-    g_pa_stream_set_started_callback =
-        (pa_stream_set_started_callback)GetProcAddress(
-            libpulse, "WIN_pa_stream_set_started_callback");
-    g_pa_stream_set_underflow_callback =
-        (pa_stream_set_underflow_callback)GetProcAddress(
-            libpulse, "WIN_pa_stream_set_underflow_callback");
-    g_pa_stream_cork =
-        (pa_stream_cork)GetProcAddress(libpulse, "WIN_pa_stream_cork");
-    g_pa_stream_is_corked =
-        (pa_stream_is_corked)GetProcAddress(libpulse, "WIN_pa_stream_is_corked");
-    g_pa_stream_flush =
-        (pa_stream_flush)GetProcAddress(libpulse, "WIN_pa_stream_flush");
-    g_pa_stream_update_sample_rate =
-        (pa_stream_update_sample_rate)GetProcAddress(
-            libpulse, "WIN_pa_stream_update_sample_rate");
-    g_pa_stream_get_state =
-        (pa_stream_get_state)GetProcAddress(libpulse, "WIN_pa_stream_get_state");
-    g_pa_stream_get_sample_spec = (pa_stream_get_sample_spec)GetProcAddress(
-        libpulse, "WIN_pa_stream_get_sample_spec");
-    g_pa_stream_get_latency = (pa_stream_get_latency)GetProcAddress(
-        libpulse, "WIN_pa_stream_get_latency");
-    g_pa_stream_get_timing_info = (pa_stream_get_timing_info)GetProcAddress(
-        libpulse, "WIN_pa_stream_get_timing_info");
-    g_pa_stream_trigger =
-        (pa_stream_trigger)GetProcAddress(libpulse, "WIN_pa_stream_trigger");
-    g_pa_stream_update_timing_info =
-        (pa_stream_update_timing_info)GetProcAddress(
-            libpulse, "WIN_pa_stream_update_timing_info");
-    g_pa_stream_get_buffer_attr = (pa_stream_get_buffer_attr)GetProcAddress(
-        libpulse, "WIN_pa_stream_get_buffer_attr");
+    LOAD_PULSE_FUNC(pa_strerror);
+    LOAD_PULSE_FUNC(pa_threaded_mainloop_new);
+    LOAD_PULSE_FUNC(pa_threaded_mainloop_free);
+    LOAD_PULSE_FUNC(pa_threaded_mainloop_start);
+    LOAD_PULSE_FUNC(pa_threaded_mainloop_stop);
+    LOAD_PULSE_FUNC(pa_threaded_mainloop_lock);
+    LOAD_PULSE_FUNC(pa_threaded_mainloop_unlock);
+    LOAD_PULSE_FUNC(pa_threaded_mainloop_wait);
+    LOAD_PULSE_FUNC(pa_threaded_mainloop_signal);
+    LOAD_PULSE_FUNC(pa_threaded_mainloop_accept);
+    LOAD_PULSE_FUNC(pa_threaded_mainloop_get_retval);
+    LOAD_PULSE_FUNC(pa_threaded_mainloop_get_api);
+    LOAD_PULSE_FUNC(pa_stream_new);
+    LOAD_PULSE_FUNC(pa_stream_connect_playback);
+    LOAD_PULSE_FUNC(pa_stream_disconnect);
+    LOAD_PULSE_FUNC(pa_stream_unref);
+    LOAD_PULSE_FUNC(pa_stream_write);
+    LOAD_PULSE_FUNC(pa_stream_cancel_write);
+    LOAD_PULSE_FUNC(pa_stream_drop);
+    LOAD_PULSE_FUNC(pa_stream_writable_size);
+    LOAD_PULSE_FUNC(pa_stream_drain);
+    LOAD_PULSE_FUNC(pa_stream_set_write_callback);
+    LOAD_PULSE_FUNC(pa_stream_set_state_callback);
+    LOAD_PULSE_FUNC(pa_stream_set_started_callback);
+    LOAD_PULSE_FUNC(pa_stream_set_underflow_callback);
+    LOAD_PULSE_FUNC(pa_stream_cork);
+    LOAD_PULSE_FUNC(pa_stream_is_corked);
+    LOAD_PULSE_FUNC(pa_stream_flush);
+    LOAD_PULSE_FUNC(pa_stream_update_sample_rate);
+    LOAD_PULSE_FUNC(pa_stream_get_state);
+    LOAD_PULSE_FUNC(pa_stream_get_sample_spec);
+    LOAD_PULSE_FUNC(pa_stream_get_latency);
+    LOAD_PULSE_FUNC(pa_stream_get_timing_info);
+    LOAD_PULSE_FUNC(pa_stream_trigger);
+    LOAD_PULSE_FUNC(pa_stream_update_timing_info);
+    LOAD_PULSE_FUNC(pa_stream_get_buffer_attr);
+    LOAD_PULSE_FUNC(pa_proplist_new);
+    LOAD_PULSE_FUNC(pa_proplist_free);
+    LOAD_PULSE_FUNC(pa_proplist_set);
+    LOAD_PULSE_FUNC(pa_proplist_sets);
+    LOAD_PULSE_FUNC(pa_proplist_setp);
+    LOAD_PULSE_FUNC(pa_context_new_with_proplist);
+    LOAD_PULSE_FUNC(pa_context_unref);
+    LOAD_PULSE_FUNC(pa_context_errno);
+    LOAD_PULSE_FUNC(pa_context_connect);
+    LOAD_PULSE_FUNC(pa_context_disconnect);
+    LOAD_PULSE_FUNC(pa_context_get_state);
+    LOAD_PULSE_FUNC(pa_context_set_state_callback);
+    LOAD_PULSE_FUNC(pa_context_set_event_callback);
+    LOAD_PULSE_FUNC(pa_operation_unref);
+    LOAD_PULSE_FUNC(pa_operation_get_state);
+    LOAD_PULSE_FUNC(pa_bytes_to_usec);
+    LOAD_PULSE_FUNC(pa_usec_to_bytes);
+    LOAD_PULSE_FUNC(pa_channel_map_init_auto);
+    LOAD_PULSE_FUNC(pa_stream_get_index);
+    LOAD_PULSE_FUNC(pa_sw_volume_from_dB);
+    LOAD_PULSE_FUNC(pa_sw_volume_to_dB);
+    LOAD_PULSE_FUNC(pa_cvolume_valid);
+    LOAD_PULSE_FUNC(pa_cvolume_equal);
+    LOAD_PULSE_FUNC(pa_context_set_sink_input_volume);
+    LOAD_PULSE_FUNC(pa_cvolume_init);
+    LOAD_PULSE_FUNC(pa_cvolume_set);
+    LOAD_PULSE_FUNC(pa_context_get_sink_input_info);
+    LOAD_PULSE_FUNC(pa_context_subscribe);
+    LOAD_PULSE_FUNC(pa_context_set_subscribe_callback);
 
-    g_pa_proplist_new =
-        (pa_proplist_new)GetProcAddress(libpulse, "WIN_pa_proplist_new");
-    g_pa_proplist_free =
-        (pa_proplist_free)GetProcAddress(libpulse, "WIN_pa_proplist_free");
-    g_pa_proplist_set =
-        (pa_proplist_set)GetProcAddress(libpulse, "WIN_pa_proplist_set");
-    g_pa_proplist_sets =
-        (pa_proplist_sets)GetProcAddress(libpulse, "WIN_pa_proplist_sets");
-    g_pa_proplist_setp =
-        (pa_proplist_setp)GetProcAddress(libpulse, "WIN_pa_proplist_setp");
-
-    g_pa_context_new_with_proplist =
-        (pa_context_new_with_proplist)GetProcAddress(
-            libpulse, "WIN_pa_context_new_with_proplist");
-    g_pa_context_unref =
-        (pa_context_unref)GetProcAddress(libpulse, "WIN_pa_context_unref");
-    g_pa_context_errno =
-        (pa_context_errno)GetProcAddress(libpulse, "WIN_pa_context_errno");
-    g_pa_context_connect =
-        (pa_context_connect)GetProcAddress(libpulse, "WIN_pa_context_connect");
-    g_pa_context_disconnect = (pa_context_disconnect)GetProcAddress(
-        libpulse, "WIN_pa_context_disconnect");
-    g_pa_context_get_state =
-        (pa_context_get_state)GetProcAddress(libpulse, "WIN_pa_context_get_state");
-    g_pa_context_set_state_callback =
-        (pa_context_set_state_callback)GetProcAddress(
-            libpulse, "WIN_pa_context_set_state_callback");
-    g_pa_context_set_event_callback =
-        (pa_context_set_event_callback)GetProcAddress(
-            libpulse, "WIN_pa_context_set_event_callback");
-
-    g_pa_channel_map_init_auto = (pa_channel_map_init_auto)GetProcAddress(
-        libpulse, "WIN_pa_channel_map_init_auto");
-
-    g_pa_operation_unref =
-        (pa_operation_unref)GetProcAddress(libpulse, "WIN_pa_operation_unref");
-    g_pa_operation_get_state = (pa_operation_get_state)GetProcAddress(
-        libpulse, "WIN_pa_operation_get_state");
-
-    g_pa_bytes_to_usec =
-        (pa_bytes_to_usec)GetProcAddress(libpulse, "WIN_pa_bytes_to_usec");
-    g_pa_usec_to_bytes =
-        (pa_usec_to_bytes)GetProcAddress(libpulse, "WIN_pa_usec_to_bytes");
-
-    g_pa_stream_get_index =
-        (pa_stream_get_index)GetProcAddress(libpulse, "WIN_pa_stream_get_index");
-    g_pa_sw_volume_from_dB =
-        (pa_sw_volume_from_dB)GetProcAddress(libpulse, "WIN_pa_sw_volume_from_dB");
-    g_pa_sw_volume_to_dB =
-        (pa_sw_volume_to_dB)GetProcAddress(libpulse, "WIN_pa_sw_volume_to_dB");
-    g_pa_context_set_sink_input_volume =
-        (pa_context_set_sink_input_volume)GetProcAddress(
-            libpulse, "WIN_pa_context_set_sink_input_volume");
-    g_pa_cvolume_init =
-        (pa_cvolume_init)GetProcAddress(libpulse, "WIN_pa_cvolume_init");
-    g_pa_cvolume_set =
-        (pa_cvolume_set)GetProcAddress(libpulse, "WIN_pa_cvolume_set");
-    g_pa_cvolume_valid =
-        (pa_cvolume_valid)GetProcAddress(libpulse, "WIN_pa_cvolume_valid");
-    g_pa_cvolume_equal =
-        (pa_cvolume_equal)GetProcAddress(libpulse, "WIN_pa_cvolume_equal");
-    g_pa_context_get_sink_input_info =
-        (pa_context_get_sink_input_info)GetProcAddress(
-            libpulse, "WIN_pa_context_get_sink_input_info");
-    g_pa_context_subscribe =
-        (pa_context_subscribe)GetProcAddress(libpulse, "WIN_pa_context_subscribe");
-    g_pa_context_set_subscribe_callback =
-        (pa_context_set_subscribe_callback)GetProcAddress(
-            libpulse, "WIN_pa_context_set_subscribe_callback");
+#undef LOAD_PULSE_FUNC
 
     void* winelib = GetProcAddress(libpulse, "foo_out_pulse_winelib_dll");
 
-    is_using_winelib = winelib != NULL;
-    console::info(is_using_winelib ? "Pulseaudio: using winelib libpulse"
-                                   : "Pulseaudio: Using Windows libpulse");
-
-    if (g_pa_strerror == NULL || g_pa_threaded_mainloop_new == NULL ||
-        g_pa_threaded_mainloop_free == NULL ||
-        g_pa_threaded_mainloop_start == NULL ||
-        g_pa_threaded_mainloop_stop == NULL ||
-        g_pa_threaded_mainloop_lock == NULL ||
-        g_pa_threaded_mainloop_unlock == NULL ||
-        g_pa_threaded_mainloop_wait == NULL ||
-        g_pa_threaded_mainloop_signal == NULL ||
-        g_pa_threaded_mainloop_accept == NULL ||
-        g_pa_threaded_mainloop_get_retval == NULL ||
-        g_pa_threaded_mainloop_get_api == NULL || g_pa_stream_new == NULL ||
-        g_pa_stream_connect_playback == NULL ||
-        g_pa_stream_disconnect == NULL || g_pa_stream_unref == NULL ||
-        g_pa_stream_write == NULL || g_pa_stream_cancel_write == NULL ||
-        g_pa_stream_drop == NULL || g_pa_stream_writable_size == NULL ||
-        g_pa_stream_drain == NULL || g_pa_stream_set_write_callback == NULL ||
-        g_pa_stream_set_state_callback == NULL ||
-        g_pa_stream_set_started_callback == NULL ||
-        g_pa_stream_set_underflow_callback == NULL ||
-        g_pa_stream_cork == NULL || g_pa_stream_is_corked == NULL ||
-        g_pa_stream_flush == NULL || g_pa_stream_update_sample_rate == NULL ||
-        g_pa_stream_get_state == NULL || g_pa_stream_get_sample_spec == NULL ||
-        g_pa_stream_get_latency == NULL ||
-        g_pa_stream_get_timing_info == NULL || g_pa_stream_trigger == NULL ||
-        g_pa_stream_update_timing_info == NULL ||
-        g_pa_stream_get_buffer_attr == NULL || g_pa_proplist_new == NULL ||
-        g_pa_proplist_free == NULL || g_pa_proplist_set == NULL ||
-        g_pa_proplist_sets == NULL || g_pa_proplist_setp == NULL ||
-        g_pa_context_new_with_proplist == NULL || g_pa_context_unref == NULL ||
-        g_pa_context_errno == NULL || g_pa_context_connect == NULL ||
-        g_pa_context_disconnect == NULL || g_pa_context_get_state == NULL ||
-        g_pa_context_set_state_callback == NULL ||
-        g_pa_context_set_event_callback == NULL ||
-        g_pa_channel_map_init_auto == NULL || g_pa_operation_unref == NULL ||
-        g_pa_operation_get_state == NULL || g_pa_bytes_to_usec == NULL ||
-        g_pa_stream_get_index == NULL || g_pa_sw_volume_from_dB == NULL ||
-        g_pa_sw_volume_to_dB == NULL ||
-        g_pa_context_set_sink_input_volume == NULL ||
-        g_pa_cvolume_init == NULL || g_pa_cvolume_set == NULL ||
-        g_pa_cvolume_valid == NULL || g_pa_cvolume_equal == NULL ||
-        g_pa_context_get_sink_input_info == NULL ||
-        g_pa_context_subscribe == NULL ||
-        g_pa_context_set_subscribe_callback == NULL ||
-        g_pa_usec_to_bytes == NULL) {
-      console::error("Could not load libpulse-0.dll");
-      return false;
-    }
+    is_using_winelib = (winelib != NULL);
+    console::info(is_using_winelib ? "PulseAudio: using winelib libpulse"
+                                   : "PulseAudio: Using Windows libpulse");
 
     g_pa_is_loaded = true;
     return true;
@@ -1162,4 +1079,5 @@ class output_pulse : public output_v4 {
 };
 
 static output_factory_t<output_pulse> g_output_pulse_factory;
+
 }  // namespace
