@@ -283,11 +283,11 @@ public:
 			// FIXME how do we do this
 			// g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_VERSION, "");
 			context = g_pa_context_new_with_proplist(api, "foobar2000", proplist);
-			// if (proplist != NULL) g_pa_proplist_free(proplist);
+			if (proplist != NULL) g_pa_proplist_free(proplist);
 		}
 
 		g_pa_context_set_state_callback(context, context_state_cb, this);
-		const char *server = /*is_using_winelib ? NULL : */ "127.0.0.1";
+		const char *server = is_using_winelib ? NULL : "127.0.0.1";
 		if (g_pa_context_connect(context, server, (pa_context_flags_t)0, NULL) < 0 || context_wait(context, mainloop)) {
 			g_pa_context_unref(context);
 			context = NULL;
