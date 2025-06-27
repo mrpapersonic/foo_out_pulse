@@ -1,0 +1,11 @@
+this contains files to build a pulseaudio-wrapper layer for the foo_out_pulse
+binary.
+
+to compile it, simply run
+```
+winegcc -o pulseaudio-wrapper.dll.so -shared pulseaudio-wrapper.c \
+	pulseaudio-wrapper.spec -I(location of pulse headers) \
+	-L(location of pulse library) -lpulse
+```
+in your shell of choice. you (obviously) need winelib and winegcc,
+as well as development headers for pulseaudio.
