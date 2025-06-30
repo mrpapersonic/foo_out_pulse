@@ -19,6 +19,7 @@
 @ stdcall WIN_pa_threaded_mainloop_accept (ptr)
 @ stdcall WIN_pa_threaded_mainloop_get_retval (ptr)
 @ stdcall WIN_pa_threaded_mainloop_get_api (ptr)
+@ stdcall WIN_pa_threaded_mainloop_set_name (ptr str)
 
 # stream
 @ stdcall WIN_pa_stream_new (ptr str ptr ptr)
