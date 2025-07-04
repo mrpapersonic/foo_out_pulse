@@ -5,7 +5,9 @@
 #include <windows.h>
 
 #include <mutex>
-#include <sstream>
+#include <string>
+#include <cstdarg>
+#include <cinttypes>
 
 #include "foobar2000-sdk/foobar2000/SDK/core_api.h"
 #include "foobar2000-sdk/foobar2000/SDK/output.h"
@@ -79,6 +81,7 @@ static pa_threaded_mainloop_signal g_pa_threaded_mainloop_signal;
 static pa_threaded_mainloop_accept g_pa_threaded_mainloop_accept;
 static pa_threaded_mainloop_get_retval g_pa_threaded_mainloop_get_retval;
 static pa_threaded_mainloop_get_api g_pa_threaded_mainloop_get_api;
+static pa_threaded_mainloop_set_name g_pa_threaded_mainloop_set_name;
 static pa_stream_new g_pa_stream_new;
 static pa_stream_connect_playback g_pa_stream_connect_playback;
 static pa_stream_disconnect g_pa_stream_disconnect;
@@ -242,6 +245,53 @@ private:
 	size_t max_size_;
 };
 
+/* ----------------------------------------------------------------------------------------- */
+/* logf: printf-like interface for printing into the console
+ * a.k.a. "paper hates std::stringstream"
+ * doing it this way results in a smaller binary as well */
+
+enum class logf_level {
+	info,
+	error,
+};
+
+static int vlogf(logf_level level, const char* format, std::va_list ap)
+{
+	char buf[1024];
+	int r;
+
+	r = std::vsnprintf(buf, 512, format, ap);
+	if (r < 0)
+		return -1;
+
+	switch (level) {
+	case logf_level::info:
+		console::info(buf);
+		break;
+	case logf_level::error:
+		console::error(buf);
+		break;
+	}
+
+	return r;
+}
+
+static int logf(logf_level level, const char* format, ...)
+{
+	std::va_list ap;
+	int r;
+
+	va_start(ap, format);
+
+	r = vlogf(level, format, ap);
+
+	va_end(ap);
+
+	return r;
+}
+
+/* ----------------------------------------------------------------------------------------- */
+
 class output_pulse : public output_v4 {
 public:
 	typedef struct fade_in {
@@ -265,6 +315,7 @@ public:
 		}
 
 		mainloop = g_pa_threaded_mainloop_new();
+		g_pa_threaded_mainloop_set_name(mainloop, "fb2k-pa-mainloop");
 		if (g_pa_threaded_mainloop_start(mainloop) < 0) {
 			g_pa_threaded_mainloop_free(mainloop);
 			mainloop = NULL;
@@ -278,12 +329,14 @@ public:
 		{
 			pa_proplist *proplist = g_pa_proplist_new();
 			g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_NAME, "foobar2000");
-			g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_ID, "foobar2000");
+			// maybe us.tflc.foobar2000 ??
+			g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_ID, "org.foobar2000.foobar2000");
 			g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_ICON_NAME, "foobar2000");
-			// FIXME how do we do this
-			// g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_VERSION, "");
+			g_pa_proplist_sets(proplist, PA_PROP_APPLICATION_VERSION,
+			                   core_version_info_v2::get()->get_version_as_text());
 			context = g_pa_context_new_with_proplist(api, "foobar2000", proplist);
-			if (proplist != NULL) g_pa_proplist_free(proplist);
+			if (proplist != NULL)
+				g_pa_proplist_free(proplist);
 		}
 
 		g_pa_context_set_state_callback(context, context_state_cb, this);
@@ -301,15 +354,16 @@ public:
 		}
 
 		pa_operation *op = g_pa_context_subscribe(context, PA_SUBSCRIPTION_MASK_SINK_INPUT, NULL, NULL);
-		if (op != NULL) {
-			g_pa_operation_unref(op);
-		}
+		if (op)
+			g_pa_operation_unref(op); /* KILL IT WITH FIRE */
+
 		g_pa_context_set_subscribe_callback(context, context_subscribe_cb, this);
 
 		g_pa_threaded_mainloop_unlock(mainloop);
 
 		trigger_update.create(true, true);
 	}
+
 	~output_pulse()
 	{
 		if (mainloop != NULL) {
@@ -467,11 +521,15 @@ public:
 
 	void process_samples(const audio_chunk &p_chunk)
 	{
-		pfc::dynamic_assert(m_incoming_ptr == m_incoming.get_size());
 		t_samplespec spec;
+
+		pfc::dynamic_assert(m_incoming_ptr == m_incoming.get_size());
+
 		spec.fromchunk(p_chunk);
 		if (!spec.is_valid())
 			pfc::throw_exception_with_message<exception_io_data>("Invalid audio stream specifications");
+
+		/* copy data into our own buffer */
 		m_incoming_spec = spec;
 		size_t length = p_chunk.get_used_size();
 		m_incoming.set_data_fromptr(p_chunk.get_data(), length);
@@ -502,6 +560,7 @@ public:
 
 	static void g_enum_devices(output_device_enum_callback &p_callback)
 	{
+		/* TODO actually list sinks instead of just the default one */
 		const GUID device = {
 		    0x8bf1c19, 0x5b9d, 0x4992, {0x76, 0x18, 0x13, 0x8b, 0xa2, 0x1, 0xd7, 0xa6}
         };
@@ -563,16 +622,7 @@ private:
 
 	service_ptr_t<playback_control> playback_control;
 
-	static bool context_wait(pa_context *ctx, pa_threaded_mainloop *ml)
-	{
-		pa_context_state_t state;
-		while ((state = g_pa_context_get_state(ctx)) != PA_CONTEXT_READY) {
-			if (state == PA_CONTEXT_FAILED || state == PA_CONTEXT_TERMINATED)
-				return false;
-			g_pa_threaded_mainloop_wait(ml);
-		}
-		return 0;
-	}
+	/* ---- BEGIN CALLBACKS */
 
 	static void __stdcall context_subscribe_cb(pa_context *c, pa_subscription_event_type_t t, uint32_t idx,
 	                                           void *userdata)
@@ -600,35 +650,6 @@ private:
 		}
 	}
 
-	static void stop()
-	{
-		fb2k::inMainThread([]() { playback_control::get()->stop(); });
-	}
-
-	static void __stdcall context_state_cb(pa_context *ctx, void *userdata)
-	{
-		output_pulse *output = (output_pulse *)userdata;
-		std::stringstream s;
-		switch (g_pa_context_get_state(ctx)) {
-			case PA_CONTEXT_FAILED: console_error("connection failed", g_pa_context_errno(ctx)); stop();
-			case PA_CONTEXT_READY:
-			case PA_CONTEXT_TERMINATED: g_pa_threaded_mainloop_signal(output->mainloop, 0);
-			default: break;
-		}
-	}
-
-	static int stream_wait(pa_stream *s, pa_threaded_mainloop *ml)
-	{
-		pa_stream_state_t state;
-
-		while ((state = g_pa_stream_get_state(s)) != PA_STREAM_READY) {
-			if (state == PA_STREAM_FAILED || state == PA_STREAM_TERMINATED)
-				return -1;
-			g_pa_threaded_mainloop_wait(ml);
-		}
-		return 0;
-	}
-
 	static void __stdcall stream_state_cb(pa_stream *s, void *userdata)
 	{
 		pa_threaded_mainloop *ml = (pa_threaded_mainloop *)userdata;
@@ -636,7 +657,7 @@ private:
 		switch (g_pa_stream_get_state(s)) {
 			case PA_STREAM_READY:
 			case PA_STREAM_FAILED:
-			case PA_STREAM_TERMINATED: g_pa_threaded_mainloop_signal(ml, 0);
+			case PA_STREAM_TERMINATED: g_pa_threaded_mainloop_signal(ml, 0); break;
 			default: break;
 		}
 	}
@@ -660,8 +681,71 @@ private:
 		output->trigger_update.set_state(true);
 	}
 
+	static void __stdcall context_state_cb(pa_context *ctx, void *userdata)
+	{
+		output_pulse *output = (output_pulse *)userdata;
+
+		switch (g_pa_context_get_state(ctx)) {
+		case PA_CONTEXT_FAILED:
+			console_error("connection failed", g_pa_context_errno(ctx)); stop();
+			__fallthrough;
+		case PA_CONTEXT_READY:
+			__fallthrough;
+		case PA_CONTEXT_TERMINATED:
+			g_pa_threaded_mainloop_signal(output->mainloop, 0);
+			break;
+		default: break;
+		}
+	}
+
+	static void __stdcall stream_success_cb(pa_stream *s, int success, void *userdata)
+	{
+		g_pa_threaded_mainloop_signal((pa_threaded_mainloop *)userdata, 0);
+	}
+
+	static void __stdcall stream_drained_cb(pa_stream *s, int success, void *userdata)
+	{
+		output_pulse *output = (output_pulse *)userdata;
+		output->draining = false;
+		output->drained = true;
+		output->trigger_update.set_state(true);
+	}
+
+	/* ---- END CALLBACKS */
+
+	static bool context_wait(pa_context *ctx, pa_threaded_mainloop *ml)
+	{
+		pa_context_state_t state;
+		while ((state = g_pa_context_get_state(ctx)) != PA_CONTEXT_READY) {
+			if (state == PA_CONTEXT_FAILED || state == PA_CONTEXT_TERMINATED)
+				return false;
+			g_pa_threaded_mainloop_wait(ml);
+		}
+		return 0;
+	}
+
+	static void stop()
+	{
+		fb2k::inMainThread([]() { playback_control::get()->stop(); });
+	}
+
+	static int stream_wait(pa_stream *s, pa_threaded_mainloop *ml)
+	{
+		pa_stream_state_t state;
+
+		while ((state = g_pa_stream_get_state(s)) != PA_STREAM_READY) {
+			if (state == PA_STREAM_FAILED || state == PA_STREAM_TERMINATED)
+				return -1;
+			g_pa_threaded_mainloop_wait(ml);
+		}
+		return 0;
+	}
+
 	size_t write()
 	{
+		size_t cw_samples;
+		size_t delta;
+
 		if (stream == NULL || m_incoming_spec != m_active_spec) {
 			return 0;
 		}
@@ -676,7 +760,7 @@ private:
 				return 0;
 			}
 
-			int64_t write_index = info->read_index - (info->read_index % (4 * m_active_spec.m_channels));
+			int64_t write_index = info->read_index - (info->read_index % (4ll * (int64_t)m_active_spec.m_channels));
 
 			const pa_buffer_attr *buffer_attr = g_pa_stream_get_buffer_attr(stream);
 			if (buffer_attr == NULL) {
@@ -685,8 +769,8 @@ private:
 				return 0;
 			}
 
-			size_t cw_samples = buffer_attr->tlength / sizeof(audio_sample);
-			size_t delta = pfc::min_t(m_incoming.get_size() - m_incoming_ptr, cw_samples);
+			cw_samples = buffer_attr->tlength / sizeof(audio_sample);
+			delta = pfc::min_t(m_incoming.get_size() - m_incoming_ptr, cw_samples);
 			if (delta > 0) {
 				int error = g_pa_stream_write(stream, m_incoming.get_ptr() + m_incoming_ptr,
 				                              delta * sizeof(audio_sample), NULL, write_index, PA_SEEK_ABSOLUTE);
@@ -703,17 +787,16 @@ private:
 					m_incoming_ptr += delta;
 				}
 			}
-
-			g_pa_threaded_mainloop_unlock(mainloop);
-			return (cw_samples - delta) / m_incoming_spec.m_channels;
 		} else {
-			size_t cw_samples = g_pa_stream_writable_size(stream) / sizeof(audio_sample);
+			cw_samples = g_pa_stream_writable_size(stream);
 			if (cw_samples == (size_t)-1) {
 				console_error("g_pa_stream_writable_size error", g_pa_context_errno(context));
 				return 0;
 			}
 
-			size_t delta = pfc::min_t(m_incoming.get_size() - m_incoming_ptr, cw_samples);
+			cw_samples /= sizeof(audio_sample);
+
+			delta = pfc::min_t(m_incoming.get_size() - m_incoming_ptr, cw_samples);
 
 			if (delta > 0) {
 				int error = g_pa_stream_write(stream, m_incoming.get_ptr() + m_incoming_ptr,
@@ -729,10 +812,11 @@ private:
 					m_incoming_ptr += delta;
 				}
 			}
-
-			g_pa_threaded_mainloop_unlock(mainloop);
-			return (cw_samples - delta) / m_incoming_spec.m_channels;
 		}
+
+		g_pa_threaded_mainloop_unlock(mainloop);
+
+		return (cw_samples - delta) / m_incoming_spec.m_channels;
 	}
 
 	void fade_section(audio_sample *data, size_t num_samples_to_write, size_t total_fade_samples,
@@ -822,11 +906,6 @@ private:
 		g_pa_threaded_mainloop_unlock(mainloop);
 	}
 
-	static void __stdcall stream_success_cb(pa_stream *s, int success, void *userdata)
-	{
-		g_pa_threaded_mainloop_signal((pa_threaded_mainloop *)userdata, 0);
-	}
-
 	void wait_for_op(pa_operation *op)
 	{
 		if (op != NULL) {
@@ -866,18 +945,15 @@ private:
 		pa_stream_flags_t flags = (pa_stream_flags_t)(PA_STREAM_INTERPOLATE_TIMING | PA_STREAM_AUTO_TIMING_UPDATE);
 
 		struct pa_buffer_attr attr;
-		attr.maxlength =
-		    (uint32_t)ceil(m_incoming_spec.time_to_samples(buffer_length + offset) * m_incoming_spec.m_channels * 4);
+		attr.maxlength = (uint32_t)(m_incoming_spec.time_to_samples(buffer_length + offset) *
+		                            m_incoming_spec.m_channels * sizeof(float));
 		attr.fragsize = 0;
-		attr.minreq = cfg_pulseaudio_minreq_workaround.get() ? attr.maxlength / 2 : (uint32_t)-1;
+		attr.minreq = cfg_pulseaudio_minreq_workaround.get() ? (attr.maxlength / 2) : (uint32_t)-1;
 		attr.tlength = attr.maxlength;
-		attr.prebuf = (uint32_t)ceil(m_incoming_spec.time_to_samples(0.001 * cfg_pulseaudio_prebuf) *
-		                             m_incoming_spec.m_channels * 4);
+		attr.prebuf =
+		    (uint32_t)(m_incoming_spec.time_to_samples(0.001 * cfg_pulseaudio_prebuf) * m_incoming_spec.m_channels * 4);
 
-		std::stringstream s;
-		s << "PulseAudio: requesting buffer attributes: maxlength " << attr.maxlength << ", minreq " << attr.minreq
-		  << ", tlength " << attr.tlength << ", prebuf " << attr.prebuf;
-		console::info(s.str().c_str());
+		logf(logf_level::info, "PulseAudio: requesting buffer attributes: maxlength %" PRIu32 ", minreq %" PRIu32 ", tlength %" PRIu32 ", prebuf %" PRIu32, attr.maxlength, attr.minreq, attr.tlength, attr.prebuf);
 
 		g_pa_threaded_mainloop_lock(mainloop);
 
@@ -909,16 +985,11 @@ private:
 
 		if (rewind_active) {
 			const pa_buffer_attr *received_attr = g_pa_stream_get_buffer_attr(stream);
-			if (received_attr == NULL) {
+			if (received_attr) {
+				logf(logf_level::info, "PulseAudio: got buffer attributes: maxlength %" PRIu32 ", minreq %" PRIu32 ", tlength %" PRIu32 ", prebuf %" PRIu32, received_attr->maxlength, received_attr->minreq, received_attr->tlength, received_attr->prebuf);
+			} else {
 				console_error("failed to get server buffer attributes", 0);
 				rewind_buffer.reset(attr.maxlength);
-			} else {
-				std::stringstream s;
-				s << "PulseAudio: got buffer attributes: maxlength " << received_attr->maxlength << ", minreq "
-				  << received_attr->minreq << ", tlength " << received_attr->tlength << ", prebuf "
-				  << received_attr->prebuf;
-				console::info(s.str().c_str());
-				rewind_buffer.reset(received_attr->maxlength);
 			}
 		}
 
@@ -929,51 +1000,42 @@ private:
 
 	static void console_error(const char *prefix, int error_code)
 	{
-		std::stringstream s;
-		s << "PulseAudio: ";
-		s << prefix;
+		const char *error;
 
-		if (error_code != 0) {
-			const char *error = g_pa_strerror(error_code);
-			if (error != NULL) {
-				s << ": " << error;
-			}
+		error = (error_code) ? (g_pa_strerror(error_code)) : NULL;
+
+		if (error) {
+			logf(logf_level::error, "PulseAudio: %s: %s, error code %d", prefix, error, error_code);
+		} else {
+			logf(logf_level::error, "PulseAudio: %s", prefix);
 		}
-
-		console::error(s.str().c_str());
-	}
-
-	static void __stdcall stream_drained_cb(pa_stream *s, int success, void *userdata)
-	{
-		output_pulse *output = (output_pulse *)userdata;
-		output->draining = false;
-		output->drained = true;
-		output->trigger_update.set_state(true);
 	}
 
 	static bool load_pulse_dll()
 	{
+		HMODULE libpulse;
+
 		if (g_pa_is_loaded)
 			return true;
 
-		HMODULE libpulse;
-		pfc::string_formatter path = core_api::get_my_full_path();
-		path.truncate(path.scan_filename());
-		std::wstringstream wpath_libpulse;
-		wpath_libpulse << path << "pulse\\libpulse-0.dll";
-		libpulse = LoadLibraryExW(wpath_libpulse.str().c_str(), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-		wchar_t szFullPath[MAX_PATH] = {};
-		GetCurrentDirectory(MAX_PATH, szFullPath);
+		{
+			pfc::string_formatter path = core_api::get_my_full_path();
+			path.truncate(path.scan_filename());
+
+			/* ugh */
+			libpulse = LoadLibraryExA((std::string(path.c_str()) + "pulse\\libpulse-0.dll").c_str(), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+		}
+
 		if (libpulse == NULL) {
-			std::stringstream error;
-			error << "Could not load libpulse-0.dll: error code " << GetLastError();
-			console::error(error.str().c_str());
+			logf(logf_level::error, "Could not load libpulse-0.dll: error code %" PRIu32, (uint32_t)GetLastError());
 			return false;
 		}
 
 #define LOAD_PULSE_FUNC(x) \
 	do { \
 		g_##x = (x)GetProcAddress(libpulse, "WIN_" #x); \
+		if (!g_##x) \
+			g_##x = (x)GetProcAddress(libpulse, #x); \
 		if (!g_##x) { \
 			console::error("Failed to load function " #x " from libpulse DLL!"); \
 			return false; \
@@ -992,6 +1054,7 @@ private:
 		LOAD_PULSE_FUNC(pa_threaded_mainloop_accept);
 		LOAD_PULSE_FUNC(pa_threaded_mainloop_get_retval);
 		LOAD_PULSE_FUNC(pa_threaded_mainloop_get_api);
+		LOAD_PULSE_FUNC(pa_threaded_mainloop_set_name);
 		LOAD_PULSE_FUNC(pa_stream_new);
 		LOAD_PULSE_FUNC(pa_stream_connect_playback);
 		LOAD_PULSE_FUNC(pa_stream_disconnect);

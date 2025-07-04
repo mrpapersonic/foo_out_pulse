@@ -320,6 +320,7 @@ typedef void(__stdcall *pa_threaded_mainloop_wait)(pa_threaded_mainloop *m);
 typedef void(__stdcall *pa_threaded_mainloop_signal)(pa_threaded_mainloop *m, int wait_for_accept);
 typedef void(__stdcall *pa_threaded_mainloop_accept)(pa_threaded_mainloop *m);
 typedef int(__stdcall *pa_threaded_mainloop_get_retval)(pa_threaded_mainloop *m);
+typedef void(__stdcall* pa_threaded_mainloop_set_name)(pa_threaded_mainloop* m, const char* name);
 typedef pa_mainloop_api *(__stdcall *pa_threaded_mainloop_get_api)(pa_threaded_mainloop *m);
 typedef void(__stdcall *pa_io_event_cb_t)(pa_mainloop_api *ea, pa_io_event *e, int fd, pa_io_event_flags_t events,
                                           void *userdata);
